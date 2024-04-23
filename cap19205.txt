@@ -1,0 +1,179 @@
+#include <WiFi.h>
+#include <WiFiClientSecure.h>
+#include <UniversalTelegramBot.h>
+#include <ArduinoJson.h>
+#include <ESP32Servo.h>
+#include <DHT.h>
+#include <LiquidCrystal.h>
+
+// Define the pins for the LCD
+#define LCD_RS 13
+#define LCD_EN 12
+#define LCD_D4 14
+#define LCD_D5 27
+#define LCD_D6 26
+#define LCD_D7 25
+
+// Define other variables and pins
+#define sensorPin1 19
+#define sensorPin2 18
+#define relay 5
+#define gasSensorPin 34 // Define gas sensor pin
+
+int sensorState1 = 0;
+int sensorState2 = 0;
+int count = 0;
+
+bool ppmERR = true;
+int ppm = 0;
+Servo myServo; // Create Servo object
+
+// Replace with your network credentials
+const char* ssid = "OPPO A94";
+const char* password = "22446600";
+#define BOTtoken "7173375809:AAH7hOwNXUUaumpuO7odB7U6Yk6zfWovwRg"
+#define CHAT_ID "5502472131"
+WiFiClientSecure client;
+UniversalTelegramBot bot(BOTtoken, client);
+
+// Create DHT sensor objects
+#define DHT1_PIN 26
+#define DHT1_TYPE DHT11
+#define DHT2_PIN 27
+#define DHT2_TYPE DHT11
+DHT dht1(DHT1_PIN, DHT1_TYPE);
+DHT dht2(DHT2_PIN, DHT2_TYPE);
+
+// Function prototypes
+float readDHTTemperature(int sensorNumber);
+void sendTelegramMessage(String message);
+
+void setup() {
+  Serial.begin(115200);
+
+  // Initialize Wi-Fi connection
+  Serial.print("Connecting Wifi: ");
+  Serial.println(ssid);
+  WiFi.mode(WIFI_STA);
+  WiFi.begin(ssid, password);
+  //client.setCACert(TELEGRAM_CERTIFICATE_ROOT); // Add root certificate for api.telegram.org
+
+  while (WiFi.status() != WL_CONNECTED) {
+    Serial.print(".");
+    delay(500);
+  }
+
+  Serial.println("");
+  Serial.println("WiFi connected");
+  Serial.print("IP address: ");
+  Serial.println(WiFi.localIP());
+  bot.sendMessage(CHAT_ID, "Bot started up", "");
+
+  pinMode(sensorPin1, INPUT_PULLUP);
+  pinMode(sensorPin2, INPUT_PULLUP);
+  pinMode(relay, OUTPUT);
+
+  // Initialize LCD
+  LiquidCrystal lcd(LCD_RS, LCD_EN, LCD_D4, LCD_D5, LCD_D6, LCD_D7);
+  lcd.begin(16, 2); // Initialize the LCD with 16 columns and 2 rows
+  lcd.clear(); // Clear the LCD screen
+  lcd.print("COUNTER");
+  delay(1000); // Wait for 1 second
+
+  // Attach servo to pin 2
+  myServo.attach(2);
+
+  // Initialize DHT sensors
+  dht1.begin();
+  dht2.begin();
+}
+
+void loop() {
+  sensorState1 = digitalRead(sensorPin1);
+  sensorState2 = digitalRead(sensorPin2);
+
+  if (sensorState1 == LOW && sensorState2 == HIGH) {
+    count++;
+    delay(50);
+    sendTelegramMessage("Visitor entered, count: " + String(count));
+  }
+
+  if (sensorState2 == LOW && sensorState1 == HIGH) {
+    count--;
+    delay(50);
+    sendTelegramMessage("Visitor exited, count: " + String(count));
+  }
+
+  LiquidCrystal lcd(LCD_RS, LCD_EN, LCD_D4, LCD_D5, LCD_D6, LCD_D7);
+  lcd.setCursor(0, 1);
+  lcd.print("                "); // Clear previous count
+  lcd.setCursor(0, 1);
+  lcd.print("Visitors: ");
+  lcd.print(count);
+
+  // Control the light based on count
+  if (count == 0) {
+    digitalWrite(relay, LOW); // Turn off the light
+    sendTelegramMessage("Light turned off");
+  } else {
+    digitalWrite(relay, HIGH); // Turn on the light
+    sendTelegramMessage("Light turned on");
+  }
+
+  // Read temperature from DHT1 sensor
+  float temperature1 = readDHTTemperature(1);
+  if (temperature1 != -1) {
+    Serial.print("Temperature 1: ");
+    Serial.println(temperature1);
+    sendTelegramMessage("Temperature 1: " + String(temperature1));
+  }
+
+  // Read temperature from DHT2 sensor
+  float temperature2 = readDHTTemperature(2);
+  if (temperature2 != -1) {
+    Serial.print("Temperature 2: ");
+    Serial.println(temperature2);
+    sendTelegramMessage("Temperature 2: " + String(temperature2));
+  }
+
+  // Read gas sensor value
+  int gasSensorValue = analogRead(gasSensorPin);
+  ppm = map(gasSensorValue, 0, 4095, 0, 1000);
+  Serial.println("Gas sensor value: " + String(gasSensorValue) + " ppm: " + String(ppm));
+
+  // Control servo based on gas sensor reading
+  if (ppm > 500 && ppmERR == false) {
+    bot.sendMessage(CHAT_ID, "The concentration of gas is above 500ppm and servo motor is at 90 degrees", "");
+    ppmERR = true;
+    myServo.write(90); // Rotate servo to 90 degrees
+  } else if (ppm <= 500 && ppmERR == true) {
+    bot.sendMessage(CHAT_ID, "The concentration of gas is below or equal to 500ppm and servo motor is at 0 degrees", "");
+    ppmERR = false;
+    myServo.write(0); // Rotate servo to 0 degrees
+  }
+
+  delay(2000); // Adjust delay as needed
+}
+
+float readDHTTemperature(int sensorNumber) {
+  float temperature;
+  if (sensorNumber == 1) {
+    temperature = dht1.readTemperature();
+  } else if (sensorNumber == 2) {
+    temperature = dht2.readTemperature();
+  } else {
+    Serial.println("Invalid sensor number");
+    return -1;
+  }
+
+  if (isnan(temperature)) {
+    Serial.println("Failed to read from DHT sensor!");
+    return -1;
+  }
+
+  return temperature;
+}
+
+void sendTelegramMessage(String message) {
+  bot.sendMessage(CHAT_ID, message, "");
+}
